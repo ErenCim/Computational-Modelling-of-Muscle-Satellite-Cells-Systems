@@ -6,12 +6,7 @@ from model import STATE_ORDER as state_names
 n_samples = 20
 
 state_ranges = {
-    "N": (0, 2000),
-    "N_d": (0, 500),
     "M_d": (10000, 50000),
-    "M": (0, 1000),
-    "M1": (0, 1000),
-    "M2": (0, 1000),
     "QSC": (2000, 3000),
     "ASC": (0, 500),
     "M_c": (0, 1000),
@@ -19,7 +14,7 @@ state_ranges = {
 }
 
 # This is the intial values from the paper, it will be the first item in the list
-baseline_y0 = np.array([0, 0, 30000, 0, 0, 0, 2700, 0, 0, 0])
+baseline_y0 = np.array([30000, 2700, 0, 0, 0])
 
 def sample_initial_conditions(n_samples):
     y0_list = []

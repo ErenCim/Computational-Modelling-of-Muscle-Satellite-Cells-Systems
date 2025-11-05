@@ -36,15 +36,15 @@ np.random.seed(SEED)
 
 # Gradient descent optimization parameters
 INIT_MODE  = "jitter"                       # "jitter" or "random"
-JITTER_SD  = 0.01                           # e^JITTER_SD addition, since the optimization parameters are in log space, so roughly a 1% difference
+JITTER_SD  = 0.01                            # e^JITTER_SD addition, since the optimization parameters are in log space, so roughly a 1% difference
 RAND_WIDTH = 0.35                           # If the random init mode is selected it will add random noise from +- 0.35 range
-N_ITERS    = 5000                           # Number of iterations
+N_ITERS    = 500                           # Number of iterations
 LR         = 1.5e-3                         # Learning rate
 CLIP_NORM  = 300.0                          # Clipping that prevents exploding gradients having a huge impact
 PLOT_FIRST_SAMPLE_COMPARISON = True         # Whether or not to produce the final comparison plots
 
-# Can stop iterating if a loss of 1e-12 or something lower is reached
-LOSS_TARGET = 1e-12
+# Can stop iterating if the change in error is less than 1e-3
+MIN_IMPROVE = 1e-4 
 
 # Optimized parameters in log space
 phi_prior = make_phi_prior(PARAMS_OPT)
@@ -124,6 +124,8 @@ def main():
         loss_at_prior = total_loss(phi_prior, batches, w)
         print("loss_at_prior (training solver):", float(loss_at_prior))
 
+    prev_loss = None
+
     for it in range(1, N_ITERS + 1):
         # Clear previous gradients
         opt.zero_grad(set_to_none=True)
@@ -148,17 +150,18 @@ def main():
             best_loss = li
             best_phi  = theta_log.detach().clone()
 
-        # Early stop if the loss is less than or equal to the threshold
-        if li <= LOSS_TARGET:
-            print(f"[early stop] loss {li:.3e} reached target {LOSS_TARGET:.3e}")
+        # Early stop on small improvement
+        if prev_loss is not None and abs(prev_loss - li) < MIN_IMPROVE:
+            print(f"[early stop] |Δloss|={abs(prev_loss - li):.3e} < {MIN_IMPROVE:.3e}")
             break
+        prev_loss = li
 
         # Output the gradient and the loss after every 10 iteration
         if it % 10 == 0 or it == 1:
             print(f"iter {it:3d}  loss={li:.6e}  |grad| pre={preclip:.3e} post={postclip:.3e}")
 
         # After a certain number of iterations lower the learning rate to hone in more on the minimum (open to experimentation)
-        if it in {500, 1500}:
+        if it in {300, 1500}:
             for pg in opt.param_groups:
                 pg["lr"] *= 0.5
 

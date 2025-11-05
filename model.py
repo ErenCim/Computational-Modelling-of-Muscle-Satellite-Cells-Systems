@@ -19,26 +19,19 @@ def set_device_dtype(device: torch.device | str = "cpu", dtype: torch.dtype = to
     torch.set_default_dtype(dtype)
 
 # The states variables, for the relevant cells to the model
-STATE_ORDER: Sequence[str] = ["N","N_d","M_d","M","M1","M2","QSC","ASC","M_c","M_n"]
+STATE_ORDER: Sequence[str] = ["M_d","QSC","ASC","M_c","M_n"]
 # Parameters of the model, they are the coefficient terms that we are trying to recover with gradient descent
 PARAM_ORDER: Sequence[str] = [
-    "c_NMd","c_Nin","c_Nout","c_M1Nd",
-    "c_Min","c_MM1","c_Mout","c_M1out",
-    "c_M1M2","c_M2inhib","c_M2out",
-    "c_QSCN","c_QSCMd","c_ASCM2","c_ASCpro",
+    "c_NMd_Mdout", "c_QSCN","c_QSCMd","c_ASCM2","c_ASCpro",
     "c_ASCdiff","c_ASCout","c_Mcout","c_Mcfusion",
-    "c_Mdout","c_QSCself","c_Mnself","QSCmax"
+    "c_QSCself","c_Mnself","QSCmax"
 ]
 
 # Optimized parameters from literature
 PARAMS_OPT = dict(
-    c_NMd=1.18e-05, c_Nin=1.38e+00, c_Nout=3.10e+00, c_M1Nd=9.17e-5,
-    c_Min=2.81e+01, c_MM1=5.81e-05, c_Mout=2.31e+01, c_M1out=4.29e-02,
-    c_M1M2=5.48e+02, c_M2inhib=4.58e-12, c_M2out=1.18e-1,
-    c_QSCN=5.22e-06, c_QSCMd=2.09e-04, c_ASCM2=8.38e-03, c_ASCpro=4.28e-05,
+    c_NMd_Mdout=(1.18e-05 + 9.81e-04),c_QSCN=5.22e-06, c_QSCMd=2.09e-04, c_ASCM2=8.38e-03, c_ASCpro=4.28e-05,
     c_ASCdiff=7.24e-03, c_ASCout=1.55e-04, c_Mcout=3.73e-06, c_Mcfusion=4.01e+00,
-    c_Mdout=9.81e-04, c_QSCself=9.63e-02, c_Mnself=9.39e-05,
-    QSCmax=2700.0
+    c_QSCself=9.63e-02, c_Mnself=9.39e-05, QSCmax=2600.0
 )
 
 # Extract the values form the previously optimized parameter dictionary and return it in log space as a tensor
@@ -79,38 +72,19 @@ def dydt(t: torch.Tensor, y: torch.Tensor, theta_log: torch.Tensor) -> torch.Ten
     theta = torch.exp(theta_log)
 
     # torch.unbind will split the tensor and give the numerical values corresponding at this current iteration of the GD
-    (c_NMd, c_Nin, c_Nout, c_M1Nd,
-     c_Min, c_MM1, c_Mout, c_M1out,
-     c_M1M2, c_M2inhib, c_M2out,
-     c_QSCN, c_QSCMd, c_ASCM2, c_ASCpro,
+    (c_NMd_Mdout, c_QSCN, c_QSCMd, c_ASCM2, c_ASCpro,
      c_ASCdiff, c_ASCout, c_Mcout, c_Mcfusion,
-     c_Mdout, c_QSCself, c_Mnself, QSCmax) = torch.unbind(theta)
+     c_QSCself, c_Mnself, QSCmax) = torch.unbind(theta)
 
-    N, N_d, M_d, M, M1, M2, QSC, ASC, M_c, M_n = torch.unbind(y)
+    M_d, QSC, ASC, M_c, M_n = torch.unbind(y)
 
-    # I am experimenting with these, basically ensuring that the apoptotic cells counts are always positive
-    # Since it wouldn't biologically make sense for them to me negative values. But, I don't think it makes a big difference
-    Nd_pos = torch.clamp(N_d, min=0)
-    Md_pos = torch.clamp(M_d, min=0)
-
-    dN_dt  = c_Nin*M_d - c_Nout*N - c_NMd*N*M_d
-    dMd_dt = -c_Mdout*M_d*M1 - c_NMd*M_d*N
-    dNd_dt = c_NMd*N*M_d - c_M1Nd*N_d*M1
-    dM_dt  = c_Min*N - c_MM1*M*(Nd_pos + Md_pos) - c_Mout*M
-
-    # Adding the tiny epsilon to ensure the denominator is never exactly 0
-    den = c_M2inhib + Nd_pos + Md_pos + eps
-    m1_to_m2 = (c_M1M2*M1) / den
-
-    dM1_dt = c_MM1*M*(Nd_pos + Md_pos) - c_M1out*M1 - m1_to_m2
-    dM2_dt = m1_to_m2 - c_M2out*M2
-
-    dQSCdt = -c_QSCN*QSC*N - c_QSCMd*QSC*M_d + c_ASCM2*ASC*M2 - c_QSCself*QSC*softpos(QSC - QSCmax)
-    dASCdt =  c_QSCN*QSC*N + c_QSCMd*QSC*M_d - c_ASCM2*ASC*M2 + c_ASCpro*ASC*M1 - c_ASCdiff*ASC*M2 - c_ASCout*ASC
-    dM_cdt = c_ASCdiff*ASC*M2 - c_Mcfusion*M_c - c_Mcout*M_c
+    dMd_dt = -c_NMd_Mdout*M_d*2000
+    dQSCdt = -c_QSCN*QSC*750 - c_QSCMd*QSC*M_d + c_ASCM2*ASC*2400 - c_QSCself*QSC*softpos(QSC - QSCmax)
+    dASCdt =  c_QSCN*QSC*750 + c_QSCMd*QSC*M_d - c_ASCM2*ASC*2400 + c_ASCpro*ASC*1200 - c_ASCdiff*ASC*2400 - c_ASCout*ASC
+    dM_cdt = c_ASCdiff*ASC*1 - c_Mcfusion*M_c - c_Mcout*M_c
     dMn_dt = c_Mcfusion*M_c - c_Mnself*M_n*softpos(M_d - 3000.0)
 
-    return torch.stack([dN_dt, dNd_dt, dMd_dt, dM_dt, dM1_dt, dM2_dt, dQSCdt, dASCdt, dM_cdt, dMn_dt])
+    return torch.stack([dMd_dt, dQSCdt, dASCdt, dM_cdt, dMn_dt])
 
 # Starting from the y0 initial condition solves the system of ODEs and returns the parameters are the given time t (returns y(t))
 def integrate(y0: torch.Tensor, t: torch.Tensor, theta_log: torch.Tensor) -> torch.Tensor:
@@ -131,8 +105,8 @@ def simulate_on_times(y0_np: np.ndarray, t_np: np.ndarray, theta_log: torch.Tens
     return Y.detach().cpu().numpy()
 
 # Irregular sampling
-# When we say sampling, we are building the time points in which the ODE solver solves and returns the values for
-def irregular_times(t_max: float, rng: np.random.Generator, min_pts: int = 10, max_pts: int = 25, min_dt: float = 0.1, max_dt: float = 0.8, random_start_frac: float = 0.6) -> np.ndarray:
+# When we say sampling, we are building the time points in which the ODE solver solves and returns the values for (max_dt was 0.8 before)
+def irregular_times(t_max: float, rng: np.random.Generator, min_pts: int = 20, max_pts: int = 30, min_dt: float = 0.1, max_dt: float = 0.4, random_start_frac: float = 0.1) -> np.ndarray:
     # Finding a random number of points to sample
     n = int(rng.integers(min_pts, max_pts + 1))
     # Starting time of the irregular sampling
