@@ -33,6 +33,7 @@ set_device_dtype("cpu", torch.float64)   # change to ("cuda", torch.float64) if 
 
 # All of the paths that are used to get the training data and save results
 DATA_DIR   = Path("/Users/erencimentepe/Desktop/VSCode Projects/Thesis")
+# data_collection_final_combined
 SAMPLES_CSV = DATA_DIR / "irregular_samples.csv"
 Y0_CSV      = DATA_DIR / "initial_conditions.csv"
 OUT_CSV     = DATA_DIR / "learned_params_torch.csv"
