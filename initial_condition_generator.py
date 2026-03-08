@@ -5,12 +5,20 @@ from model import STATE_ORDER as state_names
 
 n_samples = 20
 
+# state_ranges = {
+#     "Myo": (0, 5000),
+#     "QSC": (2000, 3000),
+#     "ASC": (0, 500),
+#     "SC_TAP": (0, 500),
+#     "PSC": (0, 500),
+# }
+
 state_ranges = {
-    "M_d": (10000, 50000),
-    "QSC": (2000, 3000),
-    "ASC": (0, 500),
-    "M_c": (0, 1000),
-    "M_n": (0, 5000),
+    "PSC": (0, 0),
+    "QSC": (0, 0),
+    "ASC": (5000, 7000),
+    "SC_TAP": (0, 0),
+    "Myo": (0, 10000),
 }
 
 # This is the intial values from the paper, it will be the first item in the list

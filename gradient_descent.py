@@ -6,7 +6,21 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import torch
+import os
+import argparse
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from torch import nn
+
+try:
+    torch.set_num_threads(1)
+except Exception:
+    pass
+
+try:
+    torch.set_num_interop_threads(1)
+except Exception:
+    pass
 
 from model import (
     STATE_ORDER, PARAM_ORDER, PARAMS_OPT,
@@ -35,16 +49,16 @@ torch.manual_seed(SEED)
 np.random.seed(SEED)
 
 # Gradient descent optimization parameters
-INIT_MODE  = "jitter"                       # "jitter" or "random"
-JITTER_SD  = 0.01                            # e^JITTER_SD addition, since the optimization parameters are in log space, so roughly a 1% difference
-RAND_WIDTH = 0.35                           # If the random init mode is selected it will add random noise from +- 0.35 range
-N_ITERS    = 500                           # Number of iterations
-LR         = 1.5e-3                         # Learning rate
+INIT_MODE  = "random"                       # "jitter" or "random"
+JITTER_SD  = 0.7                           # e^JITTER_SD addition, since the optimization parameters are in log space, so roughly a 1% difference
+RAND_WIDTH = 1.0                           # If the random init mode is selected it will add random noise from +- 0.35 range
+N_ITERS    = 800                            # Number of iterations
+LR         = 1e-2                         # Learning rate 1.5e-3
 CLIP_NORM  = 300.0                          # Clipping that prevents exploding gradients having a huge impact
 PLOT_FIRST_SAMPLE_COMPARISON = True         # Whether or not to produce the final comparison plots
 
 # Can stop iterating if the change in error is less than 1e-3
-MIN_IMPROVE = 1e-4 
+MIN_IMPROVE = 1e-4 # Was 1e-4 but it is taking too long 
 
 # Optimized parameters in log space
 phi_prior = make_phi_prior(PARAMS_OPT)
@@ -99,6 +113,142 @@ def init_theta_log(init_mode: str) -> torch.Tensor:
         return (phi_prior + u).clone().detach().requires_grad_(True)
     else:
         raise ValueError("INIT_MODE must be 'jitter' or 'random'.")
+
+def train_once(seed: int, init_mode: str = INIT_MODE, jitter_sd: float = JITTER_SD, rand_width: float = RAND_WIDTH, n_iters: int = N_ITERS,
+                lr: float = LR, clip_norm: float = CLIP_NORM, min_improve: float = MIN_IMPROVE, run_dir: Path | None = None) -> dict:
+    
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    # Load data
+    samples_df = pd.read_csv(SAMPLES_CSV)
+    y0_df      = pd.read_csv(Y0_CSV)
+    batches, w = load_batches(samples_df, y0_df, OBS_STATES)
+
+    # Local init
+    def _init_theta_log() -> torch.Tensor:
+        if init_mode == "jitter":
+            noise = torch.randn_like(phi_prior) * jitter_sd
+            return (phi_prior + noise).clone().detach().requires_grad_(True)
+        elif init_mode == "random":
+            u = (torch.rand_like(phi_prior) * 2.0 - 1.0) * rand_width
+            return (phi_prior + u).clone().detach().requires_grad_(True)
+        else:
+            raise ValueError("INIT_MODE must be 'jitter' or 'random'.")
+
+    theta_log = _init_theta_log()
+    opt = torch.optim.Adam([theta_log], lr=lr)
+
+    best_loss = float('inf')
+    best_phi  = theta_log.detach().clone()
+
+    with torch.no_grad():
+        loss_at_prior = total_loss(phi_prior, batches, w)
+
+    prev_loss = None
+    for it in range(1, n_iters + 1):
+        opt.zero_grad(set_to_none=True)
+        loss = total_loss(theta_log, batches, w)
+        loss.backward()
+        nn.utils.clip_grad_norm_([theta_log], max_norm=clip_norm)
+        opt.step()
+
+        li = float(loss.item())
+        if li < best_loss:
+            best_loss = li
+            best_phi  = theta_log.detach().clone()
+
+        # Early stop
+        if prev_loss is not None and abs(prev_loss - li) < min_improve:
+            # (optional) print once on early stop:
+            # print(f"[seed {seed}] early stop at iter {it}, Δloss={abs(prev_loss-li):.3e}", flush=True)
+            break
+        prev_loss = li
+
+        # LR schedule
+        if it in {300, 600}:
+            for pg in opt.param_groups:
+                pg["lr"] *= 0.5
+
+    theta_hat = torch.exp(best_phi).cpu().numpy()
+
+    # Per-run artifacts (lightweight)
+    if run_dir is not None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({"name": PARAM_ORDER, "value": theta_hat}).to_csv(run_dir / "params.csv", index=False)
+        np.save(run_dir / "params.npy", theta_hat)
+        with open(run_dir / "params.json", "w") as f:
+            json.dump({k: float(v) for k, v in zip(PARAM_ORDER, theta_hat)}, f, indent=2)
+
+    row = {
+        "seed": seed,
+        "init_mode": init_mode,
+        "jitter_sd": jitter_sd,
+        "rand_width": rand_width,
+        "n_iters": n_iters,
+        "base_lr": lr,
+        "clip_norm": clip_norm,
+        "min_improve": min_improve,
+        "loss_at_prior": float(loss_at_prior),
+        "best_loss": float(best_loss),
+    }
+    row.update({f"param_{k}": float(v) for k, v in zip(PARAM_ORDER, theta_hat)})
+    return row
+
+def run_sweep(n_runs: int = 6, max_workers: int | None = None) -> Path:
+    """
+    Launch n_runs parallel train_once jobs and save a combined CSV for PCA.
+    Returns the path to the sweep CSV.
+    """
+    # It is safer to use spawn instead of fork to create multiple processes in mac and Windows
+    try:
+        import multiprocessing as mp
+        mp.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
+
+    # Create the directory that the results will be stored in
+    runs_root = DATA_DIR / "gd_sweep_runs"
+    runs_root.mkdir(parents=True, exist_ok=True)
+
+    # Generate a list of seeds to run
+    seeds = list(range(n_runs))
+
+    # If no cpu core number was passed, automatically decide how many to use
+    if max_workers is None:
+        max_workers = min(os.cpu_count() or 4, n_runs)
+    print(f"Launching sweep with {n_runs} runs using {max_workers} parallel workers.")
+
+    rows, futures = [], []
+    with ProcessPoolExecutor(max_workers=max_workers) as ex:
+        for s in seeds:
+            # Create a subfolder for each seed
+            run_dir = runs_root / f"seed_{s}"
+            # Start the work using the train_once function
+            fut = ex.submit(
+                train_once,
+                seed=s,
+                init_mode=INIT_MODE,
+                jitter_sd=JITTER_SD,
+                rand_width=RAND_WIDTH,
+                n_iters=N_ITERS,
+                lr=LR,
+                clip_norm=CLIP_NORM,
+                min_improve=MIN_IMPROVE,
+                run_dir=run_dir,
+            )
+            futures.append(fut)
+
+        for fut in as_completed(futures):
+            # fut.result() gives the dictionary retured from train_once()
+            rows.append(fut.result())
+
+    sweep_df = pd.DataFrame(rows).sort_values("seed").reset_index(drop=True)
+    sweep_csv = runs_root / "sweep_results.csv"
+    sweep_df.to_csv(sweep_csv, index=False)
+    print(f"Saved sweep table: {sweep_csv}")
+    print(sweep_df.head())
+    return sweep_csv
 
 # Training
 def main():
@@ -161,7 +311,7 @@ def main():
             print(f"iter {it:3d}  loss={li:.6e}  |grad| pre={preclip:.3e} post={postclip:.3e}")
 
         # After a certain number of iterations lower the learning rate to hone in more on the minimum (open to experimentation)
-        if it in {300, 1500}:
+        if it in {300, 600}:
             for pg in opt.param_groups:
                 pg["lr"] *= 0.5
 
@@ -199,4 +349,15 @@ def main():
             plt.show()
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    # Define terminal argument --sweep, when given will run that many instances of the gradient descent in parallel
+    parser.add_argument("--sweep", type=int, default=0)
+    # Define terminal argument --workers, when given will determine the number of cpu cores that can be used for training
+    parser.add_argument("--workers", type=int, default=None)
+    # Read the arguments we are passing to the 
+    args = parser.parse_args()
+
+    if args.sweep and args.sweep > 0:
+        run_sweep(n_runs=args.sweep, max_workers=args.workers)
+    else:
+        main()

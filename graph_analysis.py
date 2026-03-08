@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
+
 
 # Pull truth from your shared module
 from model import PARAMS_OPT, PARAM_ORDER
@@ -71,7 +73,71 @@ def compare_and_plot_params(csv_path: str, params_opt: dict | None = None, top_n
 
     return merged
 
+def plot_steady_state_heatmap(
+    csv_path: str,
+    states=("PSC", "QSC", "ASC", "SC_TAP", "Myo"),
+    sort_by: str | None = "Myo",
+    noise_tol: float = 1e-8,
+    figsize=(8, 6),
+    cmap="viridis",
+):
+    """
+    Plot a normalized heatmap of steady states from a CSV.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to steady_state_samples.csv
+    states : tuple
+        State columns to include in the heatmap
+    sort_by : str or None
+        Column to sort rows by (e.g. "Myo"). Set to None to disable sorting.
+    noise_tol : float
+        Values with abs(x) < noise_tol are snapped to zero
+    figsize : tuple
+        Figure size
+    cmap : str
+        Matplotlib / seaborn colormap
+    """
+
+    # Load data
+    df = pd.read_csv(csv_path)
+
+    # Optional sorting (reveals structure very clearly)
+    if sort_by is not None and sort_by in df.columns:
+        df = df.sort_values(sort_by)
+
+    # Extract states
+    X = df[list(states)].copy()
+
+    # Clean numerical noise
+    X = X.clip(lower=0.0)
+    X[X.abs() < noise_tol] = 0.0
+
+    # Normalize per column (CRITICAL for interpretability)
+    X_norm = (X - X.min()) / (X.max() - X.min() + 1e-12)
+
+    # Plot
+    plt.figure(figsize=figsize)
+    sns.heatmap(
+        X_norm,
+        cmap=cmap,
+        cbar_kws={"label": "Normalized value"},
+        xticklabels=states,
+        yticklabels=df["sample_id"] if "sample_id" in df.columns else False,
+    )
+
+    plt.xlabel("State")
+    plt.ylabel("Seed (sample_id)")
+    plt.title("Normalized steady states across initial conditions")
+    plt.tight_layout()
+    plt.show()
+
 if __name__ == "__main__":
-    csv_path = "/Users/erencimentepe/Desktop/VSCode Projects/Thesis/learned_params_torch.csv"
-    # Uses PARAMS_OPT from model by default
-    compare_and_plot_params(csv_path, top_n=None)
+    #csv_path = "/Users/erencimentepe/Desktop/VSCode Projects/Thesis/learned_params_torch.csv"
+    #compare_and_plot_params(csv_path, top_n=None)
+    plot_steady_state_heatmap(
+        csv_path="/Users/erencimentepe/Desktop/VSCode Projects/Thesis/steady_state_samples.csv",
+        sort_by=None#"Myo"
+    )
+

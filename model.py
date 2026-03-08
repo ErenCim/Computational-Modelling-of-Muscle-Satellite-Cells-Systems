@@ -19,19 +19,19 @@ def set_device_dtype(device: torch.device | str = "cpu", dtype: torch.dtype = to
     torch.set_default_dtype(dtype)
 
 # The states variables, for the relevant cells to the model
-STATE_ORDER: Sequence[str] = ["M_d","QSC","ASC","M_c","M_n"]
+STATE_ORDER: Sequence[str] = ["PSC","QSC","ASC","SC_TAP","Myo"]
 # Parameters of the model, they are the coefficient terms that we are trying to recover with gradient descent
 PARAM_ORDER: Sequence[str] = [
-    "c_NMd_Mdout", "c_QSCN","c_QSCMd","c_ASCM2","c_ASCpro",
-    "c_ASCdiff","c_ASCout","c_Mcout","c_Mcfusion",
-    "c_QSCself","c_Mnself","QSCmax"
+    "c_kAQ", "c_kAP","c_kQA","c_kMyo","c_kPQ",
+    "c_kPT","c_kPSC","c_kPSCmax",
+    "c_kTM", "c_knew"
 ]
 
 # Optimized parameters from literature
 PARAMS_OPT = dict(
-    c_NMd_Mdout=(1.18e-05 + 9.81e-04),c_QSCN=5.22e-06, c_QSCMd=2.09e-04, c_ASCM2=8.38e-03, c_ASCpro=4.28e-05,
-    c_ASCdiff=7.24e-03, c_ASCout=1.55e-04, c_Mcout=3.73e-06, c_Mcfusion=4.01e+00,
-    c_QSCself=9.63e-02, c_Mnself=9.39e-05, QSCmax=2600.0
+    c_kAQ=9, c_kAP=18, c_kQA=20, c_kMyo=15000, c_kPQ=3,
+    c_kPT=15, c_kPSC=5, c_kPSCmax=15000,
+    c_kTM=13, c_knew=15000
 )
 
 # Extract the values form the previously optimized parameter dictionary and return it in log space as a tensor
@@ -65,26 +65,24 @@ def softpos(x: torch.Tensor, beta: float = 40.0) -> torch.Tensor:
 
 # ODE System - Providing the definition of all of the equations
 def dydt(t: torch.Tensor, y: torch.Tensor, theta_log: torch.Tensor) -> torch.Tensor:
-    # A very tiny epsilon tensor
-    eps = torch.tensor(1e-12, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
-    
     # Getting the parameters that we are trying to optimize back from their log state to real values
     theta = torch.exp(theta_log)
 
     # torch.unbind will split the tensor and give the numerical values corresponding at this current iteration of the GD
-    (c_NMd_Mdout, c_QSCN, c_QSCMd, c_ASCM2, c_ASCpro,
-     c_ASCdiff, c_ASCout, c_Mcout, c_Mcfusion,
-     c_QSCself, c_Mnself, QSCmax) = torch.unbind(theta)
+    (c_kAQ, c_kAP, c_kQA, c_kMyo,
+     c_kPQ, c_kPT, c_kPSC,
+     c_kPSCmax, c_kTM, c_knew) = torch.unbind(theta)
 
-    M_d, QSC, ASC, M_c, M_n = torch.unbind(y)
+    PSC, QSC, ASC, SC_TAP, Myo = torch.unbind(y)
 
-    dMd_dt = -c_NMd_Mdout*M_d*2000
-    dQSCdt = -c_QSCN*QSC*750 - c_QSCMd*QSC*M_d + c_ASCM2*ASC*2400 - c_QSCself*QSC*softpos(QSC - QSCmax)
-    dASCdt =  c_QSCN*QSC*750 + c_QSCMd*QSC*M_d - c_ASCM2*ASC*2400 + c_ASCpro*ASC*1200 - c_ASCdiff*ASC*2400 - c_ASCout*ASC
-    dM_cdt = c_ASCdiff*ASC*1 - c_Mcfusion*M_c - c_Mcout*M_c
-    dMn_dt = c_Mcfusion*M_c - c_Mnself*M_n*softpos(M_d - 3000.0)
+    c_cap = torch.clamp(1 - QSC / c_knew, min=0.0)
+    dASC_dt = -c_kAQ*ASC - c_kAP*ASC*c_cap + c_kQA*QSC*(1 - Myo/c_kMyo)
+    dQSCdt = c_kAQ*ASC + c_kPQ*PSC - c_kQA*QSC*(1 - Myo/c_kMyo)
+    dPSC_dt = c_kAP*ASC*c_cap - c_kPT*PSC - c_kPQ*PSC + c_kPSC*PSC*(1 - Myo/c_kPSCmax)
+    dSC_dt = c_kPT*PSC - c_kTM*SC_TAP*(1 - Myo/c_kMyo)
+    dMyo_dt = c_kTM*SC_TAP*(1 - Myo/c_kMyo)
 
-    return torch.stack([dMd_dt, dQSCdt, dASCdt, dM_cdt, dMn_dt])
+    return torch.stack([dPSC_dt, dQSCdt, dASC_dt, dSC_dt, dMyo_dt])
 
 # Starting from the y0 initial condition solves the system of ODEs and returns the parameters are the given time t (returns y(t))
 def integrate(y0: torch.Tensor, t: torch.Tensor, theta_log: torch.Tensor) -> torch.Tensor:
@@ -93,6 +91,28 @@ def integrate(y0: torch.Tensor, t: torch.Tensor, theta_log: torch.Tensor) -> tor
     # Normally odeint takes two arguments, but our ODE solver has 3, which means we need a wrapper function that allows the odeint to solve the system of ODEs using the dydt function
     # The lambda defines a function that takes current time (tt) and current initial conditions (yy) and solves the system of equations for those time points
     return odeint(func=lambda tt, yy: dydt(tt, yy, theta_log), y0=y0, t=t, method=METHOD, rtol=RTOL, atol=ATOL, options=TORCH_OPTS)
+
+def steady_state_from_y0(
+    y0_np: np.ndarray,
+    theta_log: torch.Tensor,
+    T: float = 300.0,
+    n: int = 3000,
+    deriv_tol: float = 1e-5,
+) -> tuple[np.ndarray, float, bool]:
+    y0 = torch.tensor(y0_np, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+
+    # regular long time grid for relaxation
+    tt = torch.linspace(0.0, T, n, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+
+    with torch.no_grad():
+        Y = integrate(y0, tt, theta_log)   # (n, D)
+        y_star = Y[-1]                     # (D,)
+        r = dydt(torch.tensor(0.0, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE), y_star, theta_log)
+
+    resid_max = float(r.abs().max().cpu().item())
+    ok = resid_max < deriv_tol
+    return y_star.cpu().numpy(), resid_max, ok
+
 
 # theta_log is the parameter tensor, y0_np is the initial conditions that we are starting with and t_np is the specific time points we are interested in on the ODEs
 def simulate_on_times(y0_np: np.ndarray, t_np: np.ndarray, theta_log: torch.Tensor) -> np.ndarray:

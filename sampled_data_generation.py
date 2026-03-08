@@ -10,7 +10,7 @@ import torch
 from model import (
     STATE_ORDER, PARAMS_OPT, make_phi_prior, T_MAX,
     irregular_times, simulate_on_times, integrate,
-    set_device_dtype
+    set_device_dtype, steady_state_from_y0,
 )
 
 # Basic config, the tensors will exist in the cpu and the gradients will be calculated to a float64 level precision
@@ -18,9 +18,10 @@ set_device_dtype("cpu", torch.float64)
 
 CSV_PATH        = Path("/Users/erencimentepe/Desktop/VSCode Projects/Thesis/initial_conditions.csv")
 OUT_SAMPLES_CSV = Path("/Users/erencimentepe/Desktop/VSCode Projects/Thesis/irregular_samples.csv")
-
+SS_CSV = Path("/Users/erencimentepe/Desktop/VSCode Projects/Thesis/steady_state_samples.csv")
 # Can set to 0 to skip plotting, currently will only plot the first one
-PLOT_EVERY = 100
+PLOT_EVERY = 10
+PLOT_VALUES = [3, 18, 19]
 
 # Random Number Generator for irregular sampling times
 RNG = np.random.default_rng(0)
@@ -34,7 +35,7 @@ OBS_STATES: Sequence[str] = tuple(STATE_ORDER)
 # Plotting helper function
 def maybe_plot_dense(y0_vec: np.ndarray, theta_log: torch.Tensor, sample_id: int, num_pts: int = 400) -> None:
     # Ensure we are plotting every X PLOT_EVERY index 
-    if PLOT_EVERY <= 0 or (sample_id % PLOT_EVERY) != 0:
+    if PLOT_EVERY <= 0 or ((sample_id % PLOT_EVERY) != 0 and sample_id not in PLOT_VALUES):
         return
     # Plotting 400 samples (from num_pts) which ensure a smoother curve
     # T_MAX is usualyl 7, which represents the duration of the plot
@@ -73,10 +74,12 @@ def main() -> None:
         raise ValueError(f"CSV missing required columns: {missing}")
 
     all_rows = []
+    steady_rows = []
     for sample_id, row in df_y0.iterrows():
         # row[STATE_ORDER] extacts the columns values from row in the exact order of STATE_ORDER
+        
+        
         y0_vec = row[STATE_ORDER].to_numpy(dtype=np.float64)
-
         # Plotting of the generated curves, only plot the ones every PLOT_EVERY index
         maybe_plot_dense(y0_vec, phi_prior, int(sample_id))
 
@@ -92,11 +95,22 @@ def main() -> None:
             rec = {"sample_id": int(sample_id), "t": float(tt)}
             rec.update({s: float(v) for s, v in zip(OBS_STATES, vec)})
             all_rows.append(rec)
+        """
+        y0_vec = row[STATE_ORDER].to_numpy(dtype=np.float64)
+
+        y_star, resid_max, ok = steady_state_from_y0(y0_vec, phi_prior)
+
+        print(f"sample {sample_id}: ok={ok} resid_max={resid_max:.2e} y*={y_star}")
+
+        rec = {"sample_id": int(sample_id), "resid_max": resid_max, "steady_ok": int(ok)}
+        rec.update({s: float(v) for s, v in zip(STATE_ORDER, y_star)})
+        steady_rows.append(rec)
+        """
 
     # Saving the generated irregular conditions to a csv file
-    samples_df = pd.DataFrame(all_rows)
-    samples_df.to_csv(OUT_SAMPLES_CSV, index=False)
-    print(f"[OK] Saved irregular samples -> {OUT_SAMPLES_CSV} (rows={len(samples_df)})")
+    samples_df = pd.DataFrame(steady_rows)
+    samples_df.to_csv(SS_CSV, index=False)
+    print(f"[OK] Saved irregular samples -> {SS_CSV} (rows={len(samples_df)})")
 
 if __name__ == "__main__":
     main()
