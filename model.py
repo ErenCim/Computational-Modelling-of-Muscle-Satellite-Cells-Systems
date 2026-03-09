@@ -29,9 +29,9 @@ PARAM_ORDER: Sequence[str] = [
 
 # Optimized parameters from literature
 PARAMS_OPT = dict(
-    c_kAQ=9, c_kAP=18, c_kQA=20, c_kMyo=15000, c_kPQ=3,
-    c_kPT=15, c_kPSC=5, c_kPSCmax=15000,
-    c_kTM=13, c_knew=15000
+    c_kAQ=9, c_kAP=18, c_kQA=20, c_kMyo=1500, c_kPQ=3,
+    c_kPT=15, c_kPSC=5, c_kPSCmax=1500,
+    c_kTM=13, c_knew=1500
 )
 
 # Extract the values form the previously optimized parameter dictionary and return it in log space as a tensor
@@ -171,7 +171,33 @@ def load_batches(samples_df, y0_df, obs_states: Sequence[str] = STATE_ORDER) -> 
         # Extracts the columns for the states that we are observing and converts it to a tensor
         Y_obs = torch.tensor(df_t[list(obs_states)].to_numpy(np.float64), dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)  # (T, S)
         # Gets the initial condition for the sample with this sample id and converts it to a tensor
-        y0_vec = torch.tensor(y0_df.loc[int(sid), STATE_ORDER].to_numpy(np.float64), dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)  # (10,)
+        #y0_vec = torch.tensor(y0_df.loc[int(sid), STATE_ORDER].to_numpy(np.float64), dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)  # (10,)
         # Concatenates everything together for the batches
+        #batches.append((int(sid), y0_vec, t_obs, Y_obs))
+
+        # -----------------------------
+        # Determine the initial condition
+        # -----------------------------
+
+        # If we have a t = 0 row in the observations, use that
+        if (df_t["t"] == 0.0).any():
+            y0_np = (
+                df_t.loc[df_t["t"] == 0.0, STATE_ORDER]
+                .iloc[0]
+                .to_numpy(np.float64)
+            )
+        else:
+            # Otherwise fall back to the separate initial condition table
+            y0_np = (
+                y0_df.loc[int(sid), STATE_ORDER]
+                .to_numpy(np.float64)
+            )
+
+        # Convert initial condition to tensor
+        y0_vec = torch.tensor(y0_np, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+
+        # Store batch
         batches.append((int(sid), y0_vec, t_obs, Y_obs))
+
+
     return batches, w

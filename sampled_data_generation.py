@@ -109,8 +109,8 @@ def main() -> None:
 
     # Saving the generated irregular conditions to a csv file
     samples_df = pd.DataFrame(steady_rows)
-    samples_df.to_csv(SS_CSV, index=False)
-    print(f"[OK] Saved irregular samples -> {SS_CSV} (rows={len(samples_df)})")
+    samples_df.to_csv(OUT_SAMPLES_CSV, index=False)
+    print(f"[OK] Saved irregular samples -> {OUT_SAMPLES_CSV} (rows={len(samples_df)})")
 
 if __name__ == "__main__":
     main()
