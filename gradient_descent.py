@@ -4,6 +4,8 @@ from typing import Sequence, List, Tuple
 import json
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 import os
@@ -34,6 +36,7 @@ set_device_dtype("cpu", torch.float64)   # change to ("cuda", torch.float64) if 
 # All of the paths that are used to get the training data and save results
 DATA_DIR   = Path("/Users/erencimentepe/Desktop/VSCode Projects/Thesis")
 # data_collection_final_combined
+COMBINED_SAMPLES_CSV = DATA_DIR / "data_collection_final_combined.csv"
 SAMPLES_CSV = DATA_DIR / "irregular_samples.csv"
 Y0_CSV      = DATA_DIR / "initial_conditions.csv"
 OUT_CSV     = DATA_DIR / "learned_params_torch.csv"
@@ -52,7 +55,7 @@ np.random.seed(SEED)
 # Gradient descent optimization parameters
 INIT_MODE  = "random"                       # "jitter" or "random"
 JITTER_SD  = 0.7                           # e^JITTER_SD addition, since the optimization parameters are in log space, so roughly a 1% difference
-RAND_WIDTH = 1.0                           # If the random init mode is selected it will add random noise from +- 0.35 range
+RAND_WIDTH = 2.0                           # If the random init mode is selected it will add random noise from +- 0.35 range
 N_ITERS    = 800                            # Number of iterations
 LR         = 1e-2                         # Learning rate 1.5e-3
 CLIP_NORM  = 300.0                          # Clipping that prevents exploding gradients having a huge impact
@@ -122,7 +125,7 @@ def train_once(seed: int, init_mode: str = INIT_MODE, jitter_sd: float = JITTER_
     np.random.seed(seed)
 
     # Load data
-    samples_df = pd.read_csv(SAMPLES_CSV)
+    samples_df = pd.read_csv(COMBINED_SAMPLES_CSV)
     y0_df      = pd.read_csv(Y0_CSV)
     batches, w = load_batches(samples_df, y0_df, OBS_STATES)
 
@@ -143,10 +146,13 @@ def train_once(seed: int, init_mode: str = INIT_MODE, jitter_sd: float = JITTER_
     best_loss = float('inf')
     best_phi  = theta_log.detach().clone()
 
+    loss_history = []
+
     with torch.no_grad():
         loss_at_prior = total_loss(phi_prior, batches, w)
 
     prev_loss = None
+    
     for it in range(1, n_iters + 1):
         opt.zero_grad(set_to_none=True)
         loss = total_loss(theta_log, batches, w)
@@ -159,8 +165,13 @@ def train_once(seed: int, init_mode: str = INIT_MODE, jitter_sd: float = JITTER_
             best_loss = li
             best_phi  = theta_log.detach().clone()
 
+        if it % 10 == 0 or it == 1:
+            loss_history.append((it, li))
+
         # Early stop
         if prev_loss is not None and abs(prev_loss - li) < min_improve:
+            if len(loss_history) == 0 or loss_history[-1][0] != it:
+                loss_history.append((it, li))
             # (optional) print once on early stop:
             # print(f"[seed {seed}] early stop at iter {it}, Δloss={abs(prev_loss-li):.3e}", flush=True)
             break
@@ -180,6 +191,37 @@ def train_once(seed: int, init_mode: str = INIT_MODE, jitter_sd: float = JITTER_
         np.save(run_dir / "params.npy", theta_hat)
         with open(run_dir / "params.json", "w") as f:
             json.dump({k: float(v) for k, v in zip(PARAM_ORDER, theta_hat)}, f, indent=2)
+        
+        # Save loss history as CSV
+        if len(loss_history) > 0:
+            loss_df = pd.DataFrame(loss_history, columns=["iteration", "loss"])
+            loss_df.to_csv(run_dir / "loss_history.csv", index=False)
+
+            # Save loss curve plot
+            plt.figure(figsize=(6, 4))
+            plt.plot(loss_df["iteration"], loss_df["loss"])
+            plt.xlabel("Iteration")
+            plt.ylabel("Loss")
+            plt.title(f"Loss vs Iteration (seed={seed})")
+            plt.tight_layout()
+            plt.savefig(run_dir / "loss_curve.png", dpi=200)
+            plt.close()
+
+        # Summary file
+        with open(run_dir / "summary.json", "w") as f:
+            json.dump({
+                "seed": seed,
+                "init_mode": init_mode,
+                "jitter_sd": jitter_sd,
+                "rand_width": rand_width,
+                "n_iters": n_iters,
+                "base_lr": lr,
+                "clip_norm": clip_norm,
+                "min_improve": min_improve,
+                "loss_at_prior": float(loss_at_prior),
+                "best_loss": float(best_loss),
+                "logged_points": len(loss_history),
+            }, f, indent=2)
 
     row = {
         "seed": seed,
@@ -254,13 +296,20 @@ def run_sweep(n_runs: int = 6, max_workers: int | None = None) -> Path:
 # Training
 def main():
     # Sanity check
-    if not SAMPLES_CSV.exists() or not Y0_CSV.exists():
+    if not COMBINED_SAMPLES_CSV.exists() or not Y0_CSV.exists():
         raise FileNotFoundError("Missing inputs. Run the generator first.")
 
     # Load dataframes and the batches
-    samples_df = pd.read_csv(SAMPLES_CSV)
+    samples_df = pd.read_csv(COMBINED_SAMPLES_CSV)
     y0_df      = pd.read_csv(Y0_CSV)
     batches, w = load_batches(samples_df, y0_df, OBS_STATES)
+
+    # print("-----------------Batches----------------------")
+    # print(batches)
+    # print("-----------------Weights--------------------")
+    # print(w)
+    # print("--------------------End-----------------")
+    # exit()
 
     theta_log = init_theta_log(INIT_MODE)
     # Initialize optimizer, Adam
