@@ -56,7 +56,7 @@ np.random.seed(SEED)
 INIT_MODE  = "uniform_log"                       # "jitter" or "random" or "uniform_log"
 JITTER_SD  = 0.7                           # e^JITTER_SD addition, since the optimization parameters are in log space, so roughly a 1% difference
 RAND_WIDTH = 2.5                           # If the random init mode is selected it will add random noise from +- 0.35 range
-N_ITERS    = 3000                            # Number of iterations
+N_ITERS    = 3500                            # Number of iterations
 LR         = 1e-2                         # Learning rate 1.5e-3
 CLIP_NORM  = 300.0                          # Clipping that prevents exploding gradients having a huge impact
 PLOT_FIRST_SAMPLE_COMPARISON = True         # Whether or not to produce the final comparison plots
@@ -118,13 +118,15 @@ def init_theta_log(init_mode: str) -> torch.Tensor:
     elif init_mode == "uniform_log":
         param_grids = {
             "c_kAQ":   [0.001, 0.01, 0.1, 1.0, 10.0, 80.0],
-            "c_kAP":   [0.16, 0.5, 1.0, 5.0, 10.0, 45.0],
-            "c_kQA":   [0.01, 0.1, 1.0, 10.0, 100.0, 185.0],
-            "c_kMyo":  [42.0, 100.0, 250.0, 500.0, 1150.0],
-            "c_kPQ":   [0.06, 0.6, 6.0, 60.0, 145.0],
-            "c_kPT":   [1.75, 3.5, 5.0, 7.0, 9.2],
-            "c_kPSC":  [1.9, 3.5, 5.0, 7.5, 9.8],
-            "c_kTM":   [0.35, 0.6, 0.8, 1.0, 1.3]
+            "c_kAP":   [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+            "c_kQA":   [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+            "c_kMyo":  [1/42.0, 1/100.0, 1/250.0, 1/500.0, 1/1150.0],
+            "c_kPQ":   [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+            "c_kPT":   [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+            "c_kPSC":  [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+            "c_kTM":   [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+            "c_knew":  [0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 500.0]
+            #"c_knew":  [1/0.1, 1/1.0, 1/10.0, 1/30.0, 1/100.0, 1/250.0, 1/500.0]
         }
         
         # Default choices for any parameter NOT in the dictionary above
@@ -172,13 +174,15 @@ def train_once(seed: int, init_mode: str = INIT_MODE, jitter_sd: float = JITTER_
         elif init_mode == "uniform_log":
             param_grids = {
                 "c_kAQ":   [0.001, 0.01, 0.1, 1.0, 10.0, 80.0],
-                "c_kAP":   [0.16, 0.5, 1.0, 5.0, 10.0, 45.0],
-                "c_kQA":   [0.01, 0.1, 1.0, 10.0, 100.0, 185.0],
-                "c_kMyo":  [42.0, 100.0, 250.0, 500.0, 1150.0],
-                "c_kPQ":   [0.06, 0.6, 6.0, 60.0, 145.0],
-                "c_kPT":   [1.75, 3.5, 5.0, 7.0, 9.2],
-                "c_kPSC":  [1.9, 3.5, 5.0, 7.5, 9.8],
-                "c_kTM":   [0.35, 0.6, 0.8, 1.0, 1.3]
+                "c_kAP":   [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+                "c_kQA":   [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+                "c_kMyo":  [1/42.0, 1/100.0, 1/250.0, 1/500.0, 1/1150.0],
+                "c_kPQ":   [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+                "c_kPT":   [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+                "c_kPSC":  [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+                "c_kTM":   [0.001, 0.01, 0.1, 1.0, 10.0, 45.0],
+                "c_knew":  [0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 500.0]
+                # "c_knew":  [1/0.1, 1/1.0, 1/10.0, 1/30.0, 1/100.0, 1/250.0, 1/500.0]
             }
             
             # Default choices for any parameter NOT in the dictionary above
@@ -325,7 +329,7 @@ def run_sweep(n_runs: int = 6, max_workers: int | None = None) -> Path:
     runs_root.mkdir(parents=True, exist_ok=True)
 
     # Generate a list of seeds to run
-    seeds = list(range(127, 127 + n_runs))
+    seeds = list(range(30, 30 + n_runs))
 
     # If no cpu core number was passed, automatically decide how many to use
     if max_workers is None:
